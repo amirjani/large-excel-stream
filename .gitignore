@@ -1,2 +1,4 @@
 file*.xls
 BTCUSDT.csv
+.DS_Store
+Block*.csv
