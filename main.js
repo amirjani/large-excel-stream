@@ -37,7 +37,6 @@ inquirer.prompt(questions).then(answers => {
     main(enteredPath, enteredRiskPercentage, enteredRewardPercentage);
 })
 
-
 function main(path, riskPercentage, rewardPercentage) {
     csvPath = path || 'BTCUSDT.csv';
     let inputStream = Fs.createReadStream(csvPath, 'utf8');
