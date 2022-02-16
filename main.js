@@ -141,7 +141,10 @@ function main(path, riskPercentage, rewardPercentage) {
                 console.log(`${dateFormat} - Change Price: ${changeDealTypePrice}`);
 
                 LONG_TAKE_PROFIT = entryBlockPrice * (1 + REWARD_PERCENTAGE);
-                SHORT_TAKE_PROFIT = entryBlockPrice * (1 - (REWARD_PERCENTAGE + RISK_PERCENTAGE));
+
+                let priceChanger = entryBlockPrice * (1 - RISK_PERCENTAGE);
+                SHORT_TAKE_PROFIT = priceChanger * (1 - REWARD_PERCENTAGE);
+
                 console.log(`${dateFormat} - Long Take Profit: ${LONG_TAKE_PROFIT}`);
                 console.log(`${dateFormat} - Short Take Profit: ${SHORT_TAKE_PROFIT}`);
 

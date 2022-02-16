@@ -63,6 +63,7 @@ function main(path, riskPercentage, rewardPercentage) {
     const collisionsCSVWriter = createCsvWriter({
         path: 'DailyBlockDetail.csv',
         header: [
+            { id: 'Date', title: 'Date' },
             { id: 'BlockNumber', title: 'Block Number' },
             { id: 'DealType', title: 'Deal Type' },
             { id: 'TotalCollision', title: 'Total Collision' },
@@ -91,6 +92,7 @@ function main(path, riskPercentage, rewardPercentage) {
     function WriteCollisionDetailOnCSV(blockCount, data) {
         collisionsCSVWriter.writeRecords([
             {
+                Date: data.date,
                 BlockNumber: blockCount,
                 DealType: data.dealType,
                 TotalCollision: data.totalCollision,
@@ -111,15 +113,17 @@ function main(path, riskPercentage, rewardPercentage) {
     let blockCount = 1;
     let tickCount = 0;
     let startDate = '';
+    let dateBlockEncountered = false;
 
-    function createNewBlock(dailyType) {
-        dealType = dailyType || "Entry Long";
+    function createNewBlock() {
+        dealType = "Entry Long";
         entryBlockPrice = 0;
         changeDealTypePrice = 0;
         collisionCount = 1;
         LONG_TAKE_PROFIT = 0;
         SHORT_TAKE_PROFIT = 0;
         tickCount = 0;
+        dateBlockEncountered = false;
     }
 
     inputStream
@@ -134,9 +138,9 @@ function main(path, riskPercentage, rewardPercentage) {
             let bid = Number(row['<BID>']);
 
             if (startDate === row['<DATE>']) {
-                // startDate = row['<DATE>'];
                 let date = row['<DATE>'];
                 let time = row['<TIME>'];
+
                 let [year, month, day] = date.split('.');
                 dateFormat = `${year}-${month}-${day}:${time}`;
 
@@ -146,9 +150,12 @@ function main(path, riskPercentage, rewardPercentage) {
                     changeDealTypePrice = entryBlockPrice * (1 - RISK_PERCENTAGE);
 
                     LONG_TAKE_PROFIT = entryBlockPrice * (1 + REWARD_PERCENTAGE);
-                    SHORT_TAKE_PROFIT = entryBlockPrice * (1 - (REWARD_PERCENTAGE + RISK_PERCENTAGE));
+
+                    let priceChanger = entryBlockPrice * (1 - RISK_PERCENTAGE);
+                    SHORT_TAKE_PROFIT = priceChanger * (1 - REWARD_PERCENTAGE);
 
                     WriteCollisionDetailOnCSV(blockCount, {
+                        date: startDate,
                         blockNumber: blockCount,
                         dealType: dealType,
                         totalCollision: collisionCount,
@@ -158,13 +165,14 @@ function main(path, riskPercentage, rewardPercentage) {
 
                 tickCount++;
                 // collision detection
-                if (dealType === "Entry Long" || dealType === "Impact Long" || dealType === "Open Daily") {
+                if ((dealType === "Entry Long" || dealType === "Impact Long") && dateBlockEncountered === false) {
                     if (ask <= changeDealTypePrice && ask > 0) {
                         collisionCount++;
                         dealType = "Impact Short";
                         changeDealTypePrice = ask * (1 + RISK_PERCENTAGE);
 
                         WriteCollisionDetailOnCSV(blockCount, {
+                            date: startDate,
                             blockNumber: blockCount,
                             dealType: dealType,
                             totalCollision: collisionCount,
@@ -174,7 +182,7 @@ function main(path, riskPercentage, rewardPercentage) {
                         collisionCount++;
 
                         writeBlockOnCSV(blockCount, {
-                            date: dateFormat,
+                            date: startDate,
                             blockNumber: blockCount,
                             entryPrice: entryBlockPrice,
                             stopLoss: changeDealTypePrice,
@@ -185,6 +193,7 @@ function main(path, riskPercentage, rewardPercentage) {
                         });
 
                         WriteCollisionDetailOnCSV(blockCount, {
+                            date: startDate,
                             blockNumber: blockCount,
                             dealType: "Take Profit High",
                             totalCollision: collisionCount,
@@ -192,15 +201,17 @@ function main(path, riskPercentage, rewardPercentage) {
                         });
 
                         blockCount++;
-                        createNewBlock();
+                        dateBlockEncountered = true;
+                        console.log("date block encountered: ", dateBlockEncountered);
                     }
-                } else if (dealType === "Entry Short" || dealType === "Impact Short") {
+                } else if ((dealType === "Entry Short" || dealType === "Impact Short") && dateBlockEncountered === false) {
                     if (bid >= changeDealTypePrice && bid > 0) {
                         collisionCount++;
                         dealType = "Impact Long";
                         changeDealTypePrice = bid * (1 - RISK_PERCENTAGE);
 
                         WriteCollisionDetailOnCSV(blockCount, {
+                            date: startDate,
                             blockNumber: blockCount,
                             dealType: dealType,
                             totalCollision: collisionCount,
@@ -209,7 +220,7 @@ function main(path, riskPercentage, rewardPercentage) {
                     } else if (bid <= SHORT_TAKE_PROFIT && bid > 0) {
                         collisionCount++;
                         writeBlockOnCSV(blockCount, {
-                            date: dateFormat,
+                            date: startDate,
                             blockNumber: blockCount,
                             entryPrice: entryBlockPrice,
                             stopLoss: changeDealTypePrice,
@@ -218,58 +229,24 @@ function main(path, riskPercentage, rewardPercentage) {
                             collisionCount: collisionCount,
                             tickCount: tickCount,
                         });
+
                         WriteCollisionDetailOnCSV(blockCount, {
+                            date: startDate,
                             blockNumber: blockCount,
                             dealType: "Take Profit Low",
                             totalCollision: collisionCount,
                             price: bid,
                         });
                         blockCount++;
-                        // start a new block and write on csv
-                        createNewBlock();
+                        dateBlockEncountered = true;
+                        console.log("date block encountered: ", dateBlockEncountered);
                     }
                 }
             } else {
-
-                console.log("date has changed: ", row['<DATE>']);
                 startDate = row['<DATE>'];
-                let time = row['<TIME>'];
 
-                let [year, month, day] = startDate.split('.');
-                dateFormat = `${year}-${month}-${day}:${time}`;
-
-                collisionCount++;
-                dailyDeal = 'Daily Close';
-                writeBlockOnCSV(blockCount, {
-                    date: dateFormat,
-                    blockNumber: blockCount,
-                    entryPrice: entryBlockPrice,
-                    stopLoss: changeDealTypePrice,
-                    longTakeProfit: LONG_TAKE_PROFIT,
-                    shortTakeProfit: SHORT_TAKE_PROFIT,
-                    collisionCount: collisionCount,
-                    tickCount: tickCount,
-                });
-
-                WriteCollisionDetailOnCSV(blockCount, {
-                    blockNumber: blockCount,
-                    dealType: "Daily Close",
-                    totalCollision: collisionCount,
-                    price: bid || ask,
-                });
-
-                blockCount++;
-
-                dealType = 'Open Daily';
-                WriteCollisionDetailOnCSV(blockCount, {
-                    blockNumber: blockCount,
-                    dealType: dealType,
-                    totalCollision: collisionCount,
-                    price: bid || ask,
-                });
-
-                createNewBlock(dealType);
-
+                console.log("new date encountered: ", startDate);
+                createNewBlock();
             }
         })
         .on('end', function () {
