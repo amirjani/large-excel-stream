@@ -7,7 +7,7 @@ const inquirer = require('inquirer')
 
 // constants 
 const blockCSVWriter = createCsvWriter({
-    path: 'DailyBlock.csv',
+    path: 'Block.csv',
     header: [
         { id: 'Date', title: 'Date' },
         { id: 'BlockNumber', title: 'Block Number' },
@@ -21,7 +21,7 @@ const blockCSVWriter = createCsvWriter({
 });
 
 const collisionsCSVWriter = createCsvWriter({
-    path: 'DailyBlockDetail.csv',
+    path: 'BlockDetail.csv',
     header: [
         { id: 'Date', title: 'Date' },
         { id: 'BlockNumber', title: 'Block Number' },
@@ -31,11 +31,20 @@ const collisionsCSVWriter = createCsvWriter({
     ]
 });
 
+const wantedBlockTicks = createCsvWriter({
+    path: 'TickBlock.csv',
+    header: [
+        { id: 'Ask', title: 'Ask' },
+        { id: 'Bid', title: 'Bid' }
+    ]
+});
+
+
 const questions = [
     {
         type: 'input',
         name: 'csvDirectory',
-        message: "Please Provide Us Path Of CSV: (example: ./BTCUSDT.csv): "
+        message: "Please Provide Us Path Of CSV: (example: ./BTCUSDT1.csv): "
     },
     {
         type: 'input',
@@ -51,6 +60,11 @@ const questions = [
         type: 'input',
         name: 'isDaily',
         message: "Is This Daily Data? (y/n): "
+    },
+    {
+        type: 'input',
+        name: 'floatingPrecision',
+        message: "Please Enter Floating Precision: (example: 2, It will show 2000.04): "
     }
 ]
 
@@ -58,6 +72,8 @@ const questions = [
 let enteredPath = ""; // path of csv file
 let enteredRiskPercentage = 0;
 let enteredRewardPercentage = 0;
+let floatingPrecision = 0;
+
 // Block Default 
 let lastDealType = "Entry Long";
 let entryBlockPrice = 0;
@@ -73,13 +89,19 @@ let dateBlockEncountered = false;
 
 // ask for user inputs 
 inquirer.prompt(questions).then(answers => {
-    enteredPath = answers['csvDirectory'] || "BTCUSDT.csv";
+    enteredPath = answers['csvDirectory'] || "BTCUSDT1.csv";
     enteredRiskPercentage = answers['riskPercentage'] || 0.01;
     enteredRewardPercentage = answers['rewardPercentage'] || 0.01;
     let isDaily = answers['isDaily'] === 'y';
+    floatingPrecision = answers['floatingPrecision'];
 
     main(enteredPath, enteredRiskPercentage, enteredRewardPercentage, isDaily);
 })
+
+function strip(number) {
+    var factor = Math.pow(10, floatingPrecision);
+    return Math.round(number * factor) / factor;
+}
 
 // Write On Block CSV -> add Data to Block CSV
 function writeBlockOnCSV(blockCount, data) {
@@ -87,10 +109,10 @@ function writeBlockOnCSV(blockCount, data) {
         {
             Date: data.date,
             BlockNumber: blockCount,
-            EntryLong: data.entryPrice,
-            EntryShort: data.stopLoss,
-            LongTakeProfit: data.longTakeProfit,
-            ShortTakeProfit: data.shortTakeProfit,
+            EntryLong: strip(data.entryPrice),
+            EntryShort: strip(data.stopLoss),
+            LongTakeProfit: strip(data.longTakeProfit),
+            ShortTakeProfit: strip(data.shortTakeProfit),
             CollisionCount: data.collisionCount,
             TickCount: data.tickCount,
         }
@@ -106,40 +128,53 @@ function WriteCollisionDetailOnCSV(blockCount, data) {
             BlockNumber: blockCount,
             OrderType: data.orderType,
             TotalCollision: data.totalCollision,
-            Price: data.price,
+            Price: strip(data.price),
         }
     ]).then(() => {
         // console.log('...Collision Detail Done');
     });
 }
 
-function isNewBlock() {
-    return entryBlockPrice === 0;
+function wantedBlockTicksCSV(ask, bid) {
+    wantedBlockTicks.writeRecords([
+        {
+            Ask: strip(ask),
+            Bid: strip(bid)
+        }
+    ]).then(() => {
+        // console.log('...Wanted Block Ticks Done');
+    });
+}
+
+function isNewBlock(ask, bid) {
+    return entryBlockPrice === 0 && (ask > 0 || bid > 0);
 }
 
 function newBlockCalculation(ask, bid, riskPercentage, rewardPercentage) {
-    entryBlockPrice = ask ? ask : bid;
-    changeDealTypePrice = entryBlockPrice * (1 - riskPercentage);
+    if (ask > 0 || bid > 0) {
+        entryBlockPrice = ask ? ask : bid;
+        changeDealTypePrice = entryBlockPrice * (1 - riskPercentage);
 
-    LONG_TAKE_PROFIT = entryBlockPrice * (1 + rewardPercentage);
+        LONG_TAKE_PROFIT = entryBlockPrice * (1 + rewardPercentage);
 
-    let priceChanger = entryBlockPrice * (1 - riskPercentage);
-    SHORT_TAKE_PROFIT = priceChanger * (1 - rewardPercentage)
+        let priceChanger = entryBlockPrice * (1 - riskPercentage);
+        SHORT_TAKE_PROFIT = priceChanger * (1 - rewardPercentage)
+    }
 }
 
 function impactDetector(lastDealType, ask, bid, changeDealTypePrice) {
-    if (lastDealType === "Entry Long" || lastDealType === "Impact Long") {
-        if (ask <= changeDealTypePrice && ask > 0) {
+    if ((lastDealType === "Entry Long" || lastDealType === "Impact Long") && ask > 0) {
+        if (ask <= changeDealTypePrice) {
             return "Impact Short";
         }
         else if (ask >= LONG_TAKE_PROFIT) {
             return "Take Profit High";
         }
-    } else if (lastDealType === "Entry Short" || lastDealType === "Impact Short") {
-        if (bid >= changeDealTypePrice && bid > 0) {
+    } else if ((lastDealType === "Entry Short" || lastDealType === "Impact Short") && bid > 0) {
+        if (bid >= changeDealTypePrice) {
             return "Impact Long";
         }
-        else if (bid <= SHORT_TAKE_PROFIT && bid > 0) {
+        else if (bid <= SHORT_TAKE_PROFIT) {
             return "Take Profit Low"
         }
     }
@@ -162,19 +197,21 @@ function createNewBlock() {
 }
 
 function main(path, riskPercentage, rewardPercentage, isDaily) {
-    csvPath = path || 'BTCUSDT.csv';
+    csvPath = path || 'BTCUSDT1.csv';
     let inputStream = Fs.createReadStream(csvPath, 'utf8');
 
     inputStream
         .pipe(new CsvReadableStream({ delimiter: '\t', trim: true, asObject: true, skipHeader: true }))
         .on('data', function (row) {
-
             // in every row we need to have ask and bid price for detecting impacts 
             let ask = Number(row['<ASK>']);
             let bid = Number(row['<BID>']);
 
             if (startDate === row['<DATE>']) {
-                if (isNewBlock()) {
+                if (startDate === "2021.10.31") {
+                    wantedBlockTicksCSV(ask, bid);
+                }
+                if (isNewBlock(ask, bid)) {
                     newBlockCalculation(ask, bid, riskPercentage, rewardPercentage);
 
                     WriteCollisionDetailOnCSV(blockCount, {
@@ -188,7 +225,11 @@ function main(path, riskPercentage, rewardPercentage, isDaily) {
 
                 tickCount++;
 
-                let impactType = impactDetector(lastDealType, ask, bid, changeDealTypePrice);
+                let impactType = undefined;
+                if (ask != 0 && bid != 0) {
+                    impactType = impactDetector(lastDealType, ask, bid, changeDealTypePrice);
+                }
+
 
                 if (impactType) {
                     lastDealType = impactType;
@@ -341,7 +382,21 @@ function main(path, riskPercentage, rewardPercentage, isDaily) {
                 }
             } else {
                 if (startDate != '') {
-                    console.log(`data of ${startDate} has been inserted`);
+                    // console.log(`data of ${startDate} has been inserted`);
+                }
+
+                if (startDate != '' && isDaily && dateBlockEncountered === false) {
+                    writeBlockOnCSV(blockCount, {
+                        date: startDate,
+                        blockNumber: blockCount,
+                        entryPrice: entryBlockPrice,
+                        stopLoss: changeDealTypePrice,
+                        longTakeProfit: LONG_TAKE_PROFIT,
+                        shortTakeProfit: SHORT_TAKE_PROFIT,
+                        collisionCount: collisionCount,
+                        tickCount: tickCount,
+                    });
+                    blockCount++;
                 }
 
                 startDate = row['<DATE>'];
