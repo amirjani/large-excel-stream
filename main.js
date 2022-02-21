@@ -73,6 +73,8 @@ let enteredPath = ""; // path of csv file
 let enteredRiskPercentage = 0;
 let enteredRewardPercentage = 0;
 let floatingPrecision = 0;
+let lastBidPrice = 0;
+let lastAskPrice = 0;
 
 // Block Default 
 let lastDealType = "Entry Long";
@@ -146,35 +148,40 @@ function wantedBlockTicksCSV(ask, bid) {
     });
 }
 
-function isNewBlock(ask, bid) {
-    return entryBlockPrice === 0 && (ask > 0 || bid > 0);
+function isNewBlock(lastAsk, lastBid) {
+    // entryBlockPrice === 0 start new block 
+    // @KambizGuity => told me to start new price when having valid bid and ask together
+    return entryBlockPrice === 0 && (lastAsk > 0 && lastBid > 0) && lastAskPrice > 0 && lastBidPrice > 0;
+
 }
 
-function newBlockCalculation(ask, bid, riskPercentage, rewardPercentage) {
-    if (ask > 0 || bid > 0) {
-        entryBlockPrice = ask ? ask : bid;
+function newBlockCalculation(lastAsk, lastBid, riskPercentage, rewardPercentage) {
+
+    //         --------------------
+    // ASK ---/ 
+    // BID ------------------------
+    if (lastAsk > 0 && lastBid > 0) {
+        entryBlockPrice = lastBid;
         changeDealTypePrice = entryBlockPrice * (1 - riskPercentage);
-
         LONG_TAKE_PROFIT = entryBlockPrice * (1 + rewardPercentage);
-
-        let priceChanger = entryBlockPrice * (1 - riskPercentage);
-        SHORT_TAKE_PROFIT = priceChanger * (1 - rewardPercentage)
+        SHORT_TAKE_PROFIT = changeDealTypePrice * (1 - rewardPercentage)
     }
 }
 
-function impactDetector(lastDealType, ask, bid, changeDealTypePrice) {
-    if ((lastDealType === "Entry Long" || lastDealType === "Impact Long") && ask > 0) {
-        if (ask <= changeDealTypePrice) {
+function impactDetector(lastDealType, lastAsk, lastBid, changeDealTypePrice) {
+    if ((lastDealType === "Entry Long" || lastDealType === "Impact Long") && lastAsk > 0) {
+        if (lastAsk <= changeDealTypePrice) {
             return "Impact Short";
         }
-        else if (ask >= LONG_TAKE_PROFIT) {
+
+        else if (lastAsk >= LONG_TAKE_PROFIT) {
             return "Take Profit High";
         }
-    } else if ((lastDealType === "Entry Short" || lastDealType === "Impact Short") && bid > 0) {
-        if (bid >= changeDealTypePrice) {
+    } else if ((lastDealType === "Entry Short" || lastDealType === "Impact Short") && lastBid > 0) {
+        if (lastBid >= changeDealTypePrice) {
             return "Impact Long";
         }
-        else if (bid <= SHORT_TAKE_PROFIT) {
+        else if (lastBid <= SHORT_TAKE_PROFIT) {
             return "Take Profit Low"
         }
     }
@@ -204,124 +211,202 @@ function main(path, riskPercentage, rewardPercentage, isDaily) {
         .pipe(new CsvReadableStream({ delimiter: '\t', trim: true, asObject: true, skipHeader: true }))
         .on('data', function (row) {
             // in every row we need to have ask and bid price for detecting impacts 
+
             let ask = Number(row['<ASK>']);
             let bid = Number(row['<BID>']);
 
-            if (startDate === row['<DATE>']) {
-                if (startDate === "2021.10.31") {
-                    wantedBlockTicksCSV(ask, bid);
-                }
-                if (isNewBlock(ask, bid)) {
-                    newBlockCalculation(ask, bid, riskPercentage, rewardPercentage);
-
-                    WriteCollisionDetailOnCSV(blockCount, {
-                        date: startDate,
-                        blockNumber: blockCount,
-                        orderType: lastDealType,
-                        totalCollision: collisionCount,
-                        price: entryBlockPrice,
-                    });
+            // first phase of having last ask and bid price -> both of bid and ask must be greater than 0
+            if (lastAskPrice === 0 && lastBidPrice === 0 && ask > 0 && bid > 0) {
+                lastAskPrice = ask;
+                lastBidPrice = bid;
+            } else {
+                // change lastAskPrice if ask price is greater than lastAskPrice
+                if (ask != lastAskPrice && ask > 0) {
+                    lastAskPrice = ask;
                 }
 
-                tickCount++;
-
-                let impactType = undefined;
-                if (ask != 0 && bid != 0) {
-                    impactType = impactDetector(lastDealType, ask, bid, changeDealTypePrice);
+                // change lastBidPrice if bid price is greater than lastBidPrice
+                if (bid != lastBidPrice && bid > 0) {
+                    lastBidPrice = bid;
                 }
 
+                if (startDate === row['<DATE>']) {
+                    if (startDate === "2017.09.14") {
+                        wantedBlockTicksCSV(lastAskPrice, lastBidPrice);
+                    }
 
-                if (impactType) {
-                    lastDealType = impactType;
-                    collisionCount++;
-                }
-
-                // collision detection
-                if (isDaily && dateBlockEncountered === false) {
-                    if (impactType === "Impact Short") {
-                        newChangeDealTypePrice(ask, riskPercentage);
-
+                    if (isNewBlock(lastAskPrice, lastBidPrice)) {
+                        newBlockCalculation(lastAskPrice, lastBidPrice, riskPercentage, rewardPercentage);
                         WriteCollisionDetailOnCSV(blockCount, {
                             date: startDate,
                             blockNumber: blockCount,
                             orderType: lastDealType,
                             totalCollision: collisionCount,
-                            price: ask,
+                            price: entryBlockPrice,
                         });
                     }
 
-                    if (impactType === "Take Profit High") {
-                        writeBlockOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            entryPrice: entryBlockPrice,
-                            stopLoss: changeDealTypePrice,
-                            longTakeProfit: LONG_TAKE_PROFIT,
-                            shortTakeProfit: SHORT_TAKE_PROFIT,
-                            collisionCount: collisionCount,
-                            tickCount: tickCount,
-                        });
+                    tickCount++;
 
-                        WriteCollisionDetailOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            orderType: lastDealType,
-                            totalCollision: collisionCount,
-                            price: ask,
-                        });
-
-                        blockCount++;
-                        dateBlockEncountered = true;
+                    let impactType = undefined;
+                    if (lastAskPrice != 0 && lastBidPrice != 0) {
+                        impactType = impactDetector(lastDealType, lastAskPrice, lastBidPrice, changeDealTypePrice);
                     }
 
-                    if (impactType === "Impact Long") {
-                        newChangeDealTypePrice(bid, riskPercentage);
-
-                        WriteCollisionDetailOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            orderType: lastDealType,
-                            totalCollision: collisionCount,
-                            price: bid,
-                        });
+                    if (impactType) {
+                        lastDealType = impactType;
+                        collisionCount++;
                     }
 
-                    if (impactType === "Take Profit Low") {
-                        writeBlockOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            entryPrice: entryBlockPrice,
-                            stopLoss: changeDealTypePrice,
-                            longTakeProfit: LONG_TAKE_PROFIT,
-                            shortTakeProfit: SHORT_TAKE_PROFIT,
-                            collisionCount: collisionCount,
-                            tickCount: tickCount,
-                        });
+                    // collision detection
+                    if (isDaily && dateBlockEncountered === false) {
+                        if (impactType === "Impact Short") {
+                            newChangeDealTypePrice(lastAskPrice, riskPercentage);
 
-                        WriteCollisionDetailOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            orderType: lastDealType,
-                            totalCollision: collisionCount,
-                            price: bid,
-                        });
-                        blockCount++;
-                        dateBlockEncountered = true;
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastAskPrice,
+                            });
+                        }
+
+                        if (impactType === "Take Profit High") {
+                            writeBlockOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                entryPrice: entryBlockPrice,
+                                stopLoss: changeDealTypePrice,
+                                longTakeProfit: LONG_TAKE_PROFIT,
+                                shortTakeProfit: SHORT_TAKE_PROFIT,
+                                collisionCount: collisionCount,
+                                tickCount: tickCount,
+                            });
+
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastAskPrice,
+                            });
+
+                            blockCount++;
+                            dateBlockEncountered = true;
+                        }
+
+                        if (impactType === "Impact Long") {
+                            newChangeDealTypePrice(lastBidPrice, riskPercentage);
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastBidPrice,
+                            });
+                        }
+
+                        if (impactType === "Take Profit Low") {
+                            writeBlockOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                entryPrice: entryBlockPrice,
+                                stopLoss: changeDealTypePrice,
+                                longTakeProfit: LONG_TAKE_PROFIT,
+                                shortTakeProfit: SHORT_TAKE_PROFIT,
+                                collisionCount: collisionCount,
+                                tickCount: tickCount,
+                            });
+
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastBidPrice,
+                            });
+                            blockCount++;
+                            dateBlockEncountered = true;
+                        }
+                    } else {
+                        if (impactType === "Impact Short") {
+                            newChangeDealTypePrice(lastAskPrice, riskPercentage);
+
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastAskPrice,
+                            });
+                        }
+
+                        if (impactType === "Take Profit High") {
+                            writeBlockOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                entryPrice: entryBlockPrice,
+                                stopLoss: changeDealTypePrice,
+                                longTakeProfit: LONG_TAKE_PROFIT,
+                                shortTakeProfit: SHORT_TAKE_PROFIT,
+                                collisionCount: collisionCount,
+                                tickCount: tickCount,
+                            });
+
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastAskPrice,
+                            });
+
+                            blockCount++;
+                            createNewBlock();
+                        }
+
+                        if (impactType === "Impact Long") {
+                            newChangeDealTypePrice(lastBidPrice, riskPercentage);
+
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastBidPrice,
+                            });
+                        }
+
+                        if (impactType === "Take Profit Low") {
+                            writeBlockOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                entryPrice: entryBlockPrice,
+                                stopLoss: changeDealTypePrice,
+                                longTakeProfit: LONG_TAKE_PROFIT,
+                                shortTakeProfit: SHORT_TAKE_PROFIT,
+                                collisionCount: collisionCount,
+                                tickCount: tickCount,
+                            });
+
+                            WriteCollisionDetailOnCSV(blockCount, {
+                                date: startDate,
+                                blockNumber: blockCount,
+                                orderType: lastDealType,
+                                totalCollision: collisionCount,
+                                price: lastBidPrice,
+                            });
+                            blockCount++;
+                            createNewBlock();
+                        }
                     }
                 } else {
-                    if (impactType === "Impact Short") {
-                        newChangeDealTypePrice(ask, riskPercentage);
-
-                        WriteCollisionDetailOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            orderType: lastDealType,
-                            totalCollision: collisionCount,
-                            price: ask,
-                        });
+                    if (startDate != '') {
+                        console.log(`data of ${startDate} has been inserted`);
                     }
 
-                    if (impactType === "Take Profit High") {
+                    if (startDate != '' && isDaily && dateBlockEncountered === false) {
                         writeBlockOnCSV(blockCount, {
                             date: startDate,
                             blockNumber: blockCount,
@@ -332,75 +417,12 @@ function main(path, riskPercentage, rewardPercentage, isDaily) {
                             collisionCount: collisionCount,
                             tickCount: tickCount,
                         });
-
-                        WriteCollisionDetailOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            orderType: lastDealType,
-                            totalCollision: collisionCount,
-                            price: ask,
-                        });
-
                         blockCount++;
-                        createNewBlock();
                     }
 
-                    if (impactType === "Impact Long") {
-                        newChangeDealTypePrice(bid, riskPercentage);
-
-                        WriteCollisionDetailOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            orderType: lastDealType,
-                            totalCollision: collisionCount,
-                            price: bid,
-                        });
-                    }
-
-                    if (impactType === "Take Profit Low") {
-                        writeBlockOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            entryPrice: entryBlockPrice,
-                            stopLoss: changeDealTypePrice,
-                            longTakeProfit: LONG_TAKE_PROFIT,
-                            shortTakeProfit: SHORT_TAKE_PROFIT,
-                            collisionCount: collisionCount,
-                            tickCount: tickCount,
-                        });
-
-                        WriteCollisionDetailOnCSV(blockCount, {
-                            date: startDate,
-                            blockNumber: blockCount,
-                            orderType: lastDealType,
-                            totalCollision: collisionCount,
-                            price: bid,
-                        });
-                        blockCount++;
-                        createNewBlock();
-                    }
+                    startDate = row['<DATE>'];
+                    createNewBlock();
                 }
-            } else {
-                if (startDate != '') {
-                    // console.log(`data of ${startDate} has been inserted`);
-                }
-
-                if (startDate != '' && isDaily && dateBlockEncountered === false) {
-                    writeBlockOnCSV(blockCount, {
-                        date: startDate,
-                        blockNumber: blockCount,
-                        entryPrice: entryBlockPrice,
-                        stopLoss: changeDealTypePrice,
-                        longTakeProfit: LONG_TAKE_PROFIT,
-                        shortTakeProfit: SHORT_TAKE_PROFIT,
-                        collisionCount: collisionCount,
-                        tickCount: tickCount,
-                    });
-                    blockCount++;
-                }
-
-                startDate = row['<DATE>'];
-                createNewBlock();
             }
         })
         .on('end', function () {
